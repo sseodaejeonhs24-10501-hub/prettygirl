@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>주차구역 판독기</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- TensorFlow.js library -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <!-- Teachable Machine Image library -->
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+    
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0fdf4; /* Light green background */
+        }
+        
+        #webcam-container {
+            width: 100%;
+            max-width: 500px;
+            aspect-ratio: 1 / 1;
+            overflow: hidden;
+            border-radius: 1rem;
+            box-shadow: 0 10px 25px -5px rgba(34, 197, 94, 0.4); /* Green shadow */
+            background-color: #dcfce7; /* Slightly darker green placeholder */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 0 auto;
+            position: relative;
+        }
+
+        #webcam-container canvas {
+            width: 100% !important;
+            height: 100% !important;
+            object-fit: cover;
+            border-radius: 1rem;
+        }
+
+        /* Pulse animation for the scanning effect */
+        @keyframes pulse-ring {
+            0% { transform: scale(0.8); opacity: 0.5; }
+            80% { transform: scale(1.2); opacity: 0; }
+            100% { transform: scale(1.2); opacity: 0; }
+        }
+
+        .scanning-indicator {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border: 4px solid #22c55e;
+            border-radius: 1rem;
+            animation: pulse-ring 2s infinite cubic-bezier(0.215, 0.61, 0.355, 1);
+            pointer-events: none;
+            display: none; /* Hidden initially */
+        }
+
+        #uploaded-image-container {
+            width: 100%;
+            max-width: 500px;
+            aspect-ratio: 1 / 1;
+            overflow: hidden;
+            border-radius: 1rem;
+            box-shadow: 0 10px 25px -5px rgba(34, 197, 94, 0.4);
+            background-color: #dcfce7;
+            display: none; /* Hidden initially */
+            justify-content: center;
+            align-items: center;
+            margin: 0 auto;
+            position: relative;
+        }
+
+        #uploaded-image-container img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: 1rem;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center p-4">
+
+    <div class="bg-white p-8 rounded-3xl shadow-xl w-full max-w-md text-center border-t-8 border-green-500">
+        
+        <!-- Header -->
+        <h1 class="text-3xl font-extrabold text-green-800 mb-2">주차구역 판독기</h1>
+        <p class="text-green-600 mb-6 font-medium">카메라 또는 사진으로 주차구역을 인식합니다.</p>
+
+        <div class="flex justify-center mb-4 space-x-2">
+            <button id="tab-webcam" onclick="switchTab('webcam')" class="px-4 py-2 bg-green-500 text-white font-bold rounded-lg shadow transition-colors">웹캠 사용</button>
+            <button id="tab-file" onclick="switchTab('file')" class="px-4 py-2 bg-green-200 text-green-800 font-bold rounded-lg shadow hover:bg-green-300 transition-colors">사진 업로드</button>
+        </div>
+
+        <!-- Webcam Area -->
+        <div id="webcam-container" class="mb-6">
+            <div id="placeholder-text" class="text-green-700 font-bold text-lg animate-pulse">카메라 시작 대기중...</div>
+            <div id="scanning-ring" class="scanning-indicator"></div>
+        </div>
+
+        <div id="uploaded-image-container" class="mb-6">
+            <img id="uploaded-image" src="" alt="업로드된 이미지" style="display: none;">
+            <div id="file-placeholder-text" class="text-green-700 font-bold text-lg">이미지를 업로드 해주세요</div>
+        </div>
+
+        <!-- Controls for Webcam -->
+        <div id="webcam-controls">
+            <button type="button" id="start-btn" onclick="init()" class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-4 px-6 rounded-2xl shadow-lg transition duration-300 ease-in-out transform hover:-translate-y-1 mb-4 text-xl">
+                카메라 켜기
+            </button>
+            
+            <button type="button" id="stop-btn" onclick="stopWebcam()" class="w-full bg-red-400 hover:bg-red-500 text-white font-bold py-3 px-6 rounded-2xl shadow-md transition duration-300 ease-in-out hidden mb-6">
+                종료
+            </button>
+        </div>
+
+        <div id="file-controls" class="hidden w-full mb-6 flex flex-col items-center">
+             <input type="file" id="image-upload" accept="image/*" class="hidden" onchange="handleImageUpload(event)">
+             <label for="image-upload" class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-4 px-6 rounded-2xl shadow-lg transition duration-300 ease-in-out transform hover:-translate-y-1 text-xl cursor-pointer text-center block">
+                 사진 선택하기
+             </label>
+        </div>
+
+        <!-- Results display -->
+        <div class="bg-green-50 rounded-2xl p-4 border border-green-200">
+            <h2 class="text-sm text-green-700 font-bold uppercase tracking-wider mb-2">판독 결과</h2>
+            <div id="result-message" class="text-2xl font-black text-gray-800 h-8 flex items-center justify-center">
+                <!-- Result will appear here -->
+                -
+            </div>
+            
+            <!-- Raw predictions (hidden by default, useful for debugging) -->
+            <div id="label-container" class="mt-4 text-left text-sm text-gray-600 hidden"></div>
+        </div>
+
+    </div>
+
+    <script type="text/javascript">
+        // The URL of your specific Teachable Machine model
+        const URL = "https://teachablemachine.withgoogle.com/models/_-ROZSnFq/";
+
+        let model, webcam, labelContainer, maxPredictions;
+        let isRunning = false;
+        
+        // Variables to control speech so it doesn't repeat too often
+        let lastSpokenTime = 0;
+        let lastDetectedClass = "";
+        const SPEECH_COOLDOWN = 4000; // Minimum milliseconds between saying the same thing
+        let currentMode = 'webcam'; // 'webcam' or 'file'
+
+        // UI Elements
+        const startBtn = document.getElementById('start-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const placeholderText = document.getElementById('placeholder-text');
+        const scanningRing = document.getElementById('scanning-ring');
+        const resultMessage = document.getElementById('result-message');
+        const webcamContainer = document.getElementById("webcam-container");
+        const uploadedImageContainer = document.getElementById("uploaded-image-container");
+        const webcamControls = document.getElementById("webcam-controls");
+        const fileControls = document.getElementById("file-controls");
+        const tabWebcam = document.getElementById("tab-webcam");
+        const tabFile = document.getElementById("tab-file");
+        const uploadedImage = document.getElementById("uploaded-image");
+        const filePlaceholderText = document.getElementById("file-placeholder-text");
+
+        async function loadModel() {
+            if (!model) {
+                const modelURL = URL + "model.json";
+                const metadataURL = URL + "metadata.json";
+                model = await tmImage.load(modelURL, metadataURL);
+                maxPredictions = model.getTotalClasses();
+                
+                // Setup label container (hidden details)
+                labelContainer = document.getElementById("label-container");
+                labelContainer.innerHTML = '';
+                for (let i = 0; i < maxPredictions; i++) {
+                    labelContainer.appendChild(document.createElement("div"));
+                }
+            }
+        }
+
+        function switchTab(mode) {
+            currentMode = mode;
+            
+            // Reset results
+            resultMessage.innerText = "-";
+            resultMessage.className = "text-2xl font-black text-gray-800 h-8 flex items-center justify-center";
+
+            if (mode === 'webcam') {
+                // UI Updates for Webcam tab
+                tabWebcam.classList.replace('bg-green-200', 'bg-green-500');
+                tabWebcam.classList.replace('text-green-800', 'text-white');
+                tabWebcam.classList.remove('hover:bg-green-300');
+                
+                tabFile.classList.replace('bg-green-500', 'bg-green-200');
+                tabFile.classList.replace('text-white', 'text-green-800');
+                tabFile.classList.add('hover:bg-green-300');
+
+                webcamContainer.style.display = 'flex';
+                uploadedImageContainer.style.display = 'none';
+                webcamControls.classList.remove('hidden');
+                fileControls.classList.add('hidden');
+            } else {
+                // UI Updates for File tab
+                tabFile.classList.replace('bg-green-200', 'bg-green-500');
+                tabFile.classList.replace('text-green-800', 'text-white');
+                tabFile.classList.remove('hover:bg-green-300');
+                
+                tabWebcam.classList.replace('bg-green-500', 'bg-green-200');
+                tabWebcam.classList.replace('text-white', 'text-green-800');
+                tabWebcam.classList.add('hover:bg-green-300');
+
+                webcamContainer.style.display = 'none';
+                uploadedImageContainer.style.display = 'flex';
+                webcamControls.classList.add('hidden');
+                fileControls.classList.remove('hidden');
+                
+                // Stop webcam if it was running
+                stopWebcam();
+            }
+        }
+
+        // Load the image model and setup the webcam
+        async function init() {
+            if (isRunning) return;
+            
+            // Update UI to show loading state
+            startBtn.disabled = true;
+            startBtn.innerText = "모델 로딩 중...";
+            startBtn.classList.add('opacity-50', 'cursor-not-allowed');
+
+            try {
+                await loadModel(); // Use the separated loadModel function
+
+                // Convenience function to setup a webcam
+                const flip = true; // whether to flip the webcam
+                webcam = new tmImage.Webcam(400, 400, flip); // width, height, flip
+                
+                await webcam.setup(); // request access to the webcam
+                await webcam.play();
+                
+                isRunning = true;
+                window.requestAnimationFrame(loop);
+
+                // Update DOM elements
+                webcamContainer.innerHTML = ''; // Clear placeholder
+                webcamContainer.appendChild(webcam.canvas);
+                webcamContainer.appendChild(scanningRing);
+                
+                // Show scanning animation
+                scanningRing.style.display = "block";
+
+                // Setup label container (hidden details)
+                labelContainer = document.getElementById("label-container");
+                labelContainer.innerHTML = '';
+                for (let i = 0; i < maxPredictions; i++) {
+                    labelContainer.appendChild(document.createElement("div"));
+                }
+
+                // Update UI buttons
+                startBtn.classList.add('hidden');
+                stopBtn.classList.remove('hidden');
+                resultMessage.innerText = "분석 중...";
+                resultMessage.className = "text-xl font-bold text-gray-500 animate-pulse h-8 flex items-center justify-center";
+
+            } catch (error) {
+                console.error("Error starting camera or model:", error);
+                alert("카메라를 시작하거나 모델을 불러오는데 실패했습니다. 권한을 확인해주세요.");
+                
+                // Reset UI
+                startBtn.disabled = false;
+                startBtn.innerText = "카메라 켜기";
+                startBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            }
+        }
+
+        function stopWebcam() {
+            isRunning = false;
+            if (webcam) {
+                try {
+                    webcam.stop();
+                } catch (e) {
+                    console.error("Error stopping webcam:", e);
+                }
+            }
+            
+            // Reset UI
+            if (scanningRing) {
+                scanningRing.style.display = "none";
+            }
+            
+            startBtn.classList.remove('hidden');
+            startBtn.disabled = false;
+            startBtn.innerText = "카메라 켜기";
+            startBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            stopBtn.classList.add('hidden');
+            
+            webcamContainer.innerHTML = '<div id="placeholder-text" class="text-green-700 font-bold text-lg">카메라 중지됨</div><div id="scanning-ring" class="scanning-indicator"></div>';
+        }
+
+        // Voice output function using Web Speech API
+        function speak(text) {
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel(); // Cancel any previous speech
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'ko-KR';
+                utterance.rate = 1.0;
+                window.speechSynthesis.speak(utterance);
+            }
+        }
+
+        async function loop() {
+            if (!isRunning) return;
+            
+            webcam.update(); // update the webcam frame
+            await predict();
+            window.requestAnimationFrame(loop);
+        }
+
+        // run the webcam image through the image model
+        async function predict() {
+            if (!model || !webcam) return;
+
+            // predict can take in an image, video or canvas html element
+            const prediction = await model.predict(webcam.canvas);
+            
+            let highestProb = 0;
+            let bestClass = "";
+
+            for (let i = 0; i < maxPredictions; i++) {
+                // Update detailed labels (hidden)
+                const classPrediction = prediction[i].className + ": " + (prediction[i].probability * 100).toFixed(1) + "%";
+                if (labelContainer && labelContainer.childNodes[i]) {
+                    labelContainer.childNodes[i].innerHTML = classPrediction;
+                }
+                
+                // Find the highest probability prediction
+                if (prediction[i].probability > highestProb) {
+                    highestProb = prediction[i].probability;
+                    bestClass = prediction[i].className;
+                }
+            }
+
+            // If confidence is high enough, show result and speak
+            if (highestProb > 0.75) { // 75% confidence threshold
+                handleDetection(bestClass);
+            }
+        }
+
+        function handleDetection(className) {
+            const currentTime = new Date().getTime();
+            let displayMessage = "";
+            let speechMessage = "";
+            let textClass = "";
+
+            // Check for disabled parking area or general parking area
+            if (className.includes("장애인") || className.toLowerCase().includes("disabled") || className === "Class 1") {
+                displayMessage = "장애인주차구역입니다!";
+                speechMessage = "장애인주차구역입니다!";
+                textClass = "text-2xl font-black text-blue-600 h-8 flex items-center justify-center";
+            } else if (className.includes("일반") || className.toLowerCase().includes("regular") || className === "Class 2") {
+                displayMessage = "일반주차구역입니다!";
+                speechMessage = "일반주차구역입니다!";
+                textClass = "text-2xl font-black text-emerald-600 h-8 flex items-center justify-center";
+            } else {
+                displayMessage = className + "입니다!";
+                speechMessage = className + "입니다!";
+                textClass = "text-2xl font-black text-gray-800 h-8 flex items-center justify-center";
+            }
+
+            resultMessage.innerText = displayMessage;
+            resultMessage.className = textClass;
+
+            // Trigger speech only when class changes or cooldown has passed
+            if (currentTime - lastSpokenTime > SPEECH_COOLDOWN || lastDetectedClass !== className) {
+                speak(speechMessage);
+                lastSpokenTime = currentTime;
+                lastDetectedClass = className;
+            }
+        }
+
+        async function handleImageUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            // Display loading state
+            resultMessage.innerText = "분석 중...";
+            resultMessage.className = "text-xl font-bold text-gray-500 animate-pulse h-8 flex items-center justify-center";
+
+            // Make sure model is loaded
+            try {
+                if(!model) {
+                    resultMessage.innerText = "모델 로딩 중...";
+                    await loadModel();
+                }
+            } catch(e) {
+                console.error("Model load error", e);
+                alert("모델을 불러오는데 실패했습니다.");
+                resultMessage.innerText = "-";
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = async function(e) {
+                // Show image
+                uploadedImage.src = e.target.result;
+                uploadedImage.style.display = 'block';
+                filePlaceholderText.style.display = 'none';
+
+                // Create a temporary image object to feed into the model
+                const imgElement = new Image();
+                imgElement.src = e.target.result;
+                imgElement.onload = async function() {
+                    // Predict
+                    const prediction = await model.predict(imgElement);
+                    
+                    let highestProb = 0;
+                    let bestClass = "";
+
+                    for (let i = 0; i < maxPredictions; i++) {
+                        // Find the highest probability prediction
+                        if (prediction[i].probability > highestProb) {
+                            highestProb = prediction[i].probability;
+                            bestClass = prediction[i].className;
+                        }
+                    }
+
+                    // Reset cooldown so it always speaks for a new file upload
+                    lastSpokenTime = 0; 
+                    handleDetection(bestClass);
+                }
+            }
+            reader.readAsDataURL(file);
+        }
+    </script>
+</body>
+</html>
